@@ -267,10 +267,10 @@ static void AtomicStore(ThreadState *thr, uptr pc, volatile T *a, T v,
 
   __sync_synchronize();
   SyncVar *s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, true);
-  thr->fast_state.IncrementEpoch();
-  // Can't increment epoch w/o writing to the trace as well.
-  TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
-  if (!IsReleaseOrder(mo)) {
+  if (IsReleaseOrder(mo)) {
+    thr->fast_state.IncrementEpoch();
+    // Can't increment epoch w/o writing to the trace as well.
+    TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
     ReleaseStoreImpl(thr, pc, &s->clock);
   } else {
     RelaxedStoreImpl(thr, pc, &s->clock);
