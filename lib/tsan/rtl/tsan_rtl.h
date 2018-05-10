@@ -802,7 +802,9 @@ void ReleaseStore(ThreadState *thr, uptr pc, uptr addr);
 void AfterSleep(ThreadState *thr, uptr pc);
 void AcquireImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void ReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c);
+void RelaxedImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void ReleaseStoreImpl(ThreadState *thr, uptr pc, SyncClock *c);
+void RelaxedStoreImpl(ThreadState *thr, uptr pc, SyncClock *c);
 void AcquireReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c);
 
 // The hacky call uses custom calling convention and an assembly thunk.

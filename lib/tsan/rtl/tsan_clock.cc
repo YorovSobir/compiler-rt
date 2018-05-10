@@ -194,6 +194,11 @@ void ThreadClock::release(ClockCache *c, SyncClock *dst) {
   if (dst->size_ < nclk_)
     dst->Resize(c, nclk_);
 
+  // Check if we need to resize release release sequence vector for tid
+  if (dst->released_threads_clock.Size() < dst->size_ ||
+          dst->released_threads_clock[tid_].Size() < dst->size_) {
+    dst->ResizeReleaseSequenceVectors(tid_, dst->size_);
+  }
   // Check if we had not acquired anything from other threads
   // since the last release on dst. If so, we need to update
   // only dst->elem(tid_).
@@ -216,6 +221,12 @@ void ThreadClock::release(ClockCache *c, SyncClock *dst) {
   dst->FlushDirty();
   uptr i = 0;
   for (ClockElem &ce : *dst) {
+    dst->released_threads_clock[tid_][i] = ce.epoch;
+    ++i;
+  }
+  dst->release_sequence_blocked[tid_] = false;
+  i = 0;
+  for (ClockElem &ce : *dst) {
     ce.epoch = max(ce.epoch, clk_[i]);
     ce.reused = 0;
     i++;
@@ -233,9 +244,17 @@ void ThreadClock::release(ClockCache *c, SyncClock *dst) {
     dst->elem(tid_).reused = reused_;
 }
 
+void ThreadClock::relaxed(ClockCache *c, SyncClock *dst) {
+  DCHECK_LE(nclk_, kMaxTid);
+  DCHECK_LE(dst->size_, kMaxTid);
+  // Since we do RMW with relaxed ordering nothing is changed
+}
+
 void ThreadClock::ReleaseStore(ClockCache *c, SyncClock *dst) {
   DCHECK_LE(nclk_, kMaxTid);
   DCHECK_LE(dst->size_, kMaxTid);
+  DCHECK_LE(dst->released_threads_clock.Size(), kMaxTid);
+  DCHECK_LE(dst->release_sequence_blocked.Size(), kMaxTid);
   CPP_STAT_INC(StatClockStore);
 
   if (dst->size_ == 0 && cached_idx_ != 0) {
@@ -268,6 +287,19 @@ void ThreadClock::ReleaseStore(ClockCache *c, SyncClock *dst) {
   if (dst->size_ < nclk_)
     dst->Resize(c, nclk_);
 
+  // Check if we need to resize release sequence vector for tid
+  if (dst->released_threads_clock.Size() < dst->size_ ||
+      dst->released_threads_clock[tid_].Size() < dst->size_) {
+    dst->ResizeReleaseSequenceVectors(tid_, dst->size_);
+  }
+
+  // Since it's release store we block release sequence of other threads
+  block_release_sequences(dst);
+  dst->release_sequence_blocked[tid_] = false;
+  for (uptr i = 0; i < nclk_; ++i) {
+    dst->released_threads_clock[tid_][i] = clk_[i];
+  }
+
   if (dst->release_store_tid_ == tid_ &&
       dst->release_store_reused_ == reused_ &&
       dst->elem(tid_).epoch > last_acquire_) {
@@ -281,6 +313,7 @@ void ThreadClock::ReleaseStore(ClockCache *c, SyncClock *dst) {
   dst->Unshare(c);
   // Note: dst can be larger than this ThreadClock.
   // This is fine since clk_ beyond size is all zeros.
+
   uptr i = 0;
   for (ClockElem &ce : *dst) {
     ce.epoch = clk_[i];
@@ -309,12 +342,51 @@ void ThreadClock::ReleaseStore(ClockCache *c, SyncClock *dst) {
   }
 }
 
+void ThreadClock::RelaxedStore(ClockCache *c, SyncClock *dst) {
+  DCHECK_LE(nclk_, kMaxTid);
+  DCHECK_LE(dst->size_, kMaxTid);
+  DCHECK_LE(dst->released_threads_clock.Size(), kMaxTid);
+  DCHECK_LE(dst->release_sequence_blocked.Size(), kMaxTid);
+  // TODO(yorov.sobir): add stat here
+  // Check if we need to resize dst.
+  if (dst->size_ < nclk_) {
+    dst->Resize(c, nclk_);
+  }
+  // Check if we need to resize release sequence vector for tid
+  if (dst->released_threads_clock.Size() < dst->size_ ||
+      dst->released_threads_clock[tid_].Size() < dst->size_) {
+    dst->ResizeReleaseSequenceVectors(tid_, dst->size_);
+  }
+  // relaxed store block all release sequences on current atomic
+  block_release_sequences(dst);
+  if (!dst->release_sequence_blocked[tid_]) {
+    uptr i = 0;
+    for (ClockElem &ce : *dst) {
+      ce.epoch = dst->released_threads_clock[tid_][i];
+      ce.reused = 0;
+      i++;
+    }
+  } else {
+    for (ClockElem &ce : *dst) {
+      ce.epoch = 0;
+      ce.reused = 0;
+    }
+  }
+}
+
 void ThreadClock::acq_rel(ClockCache *c, SyncClock *dst) {
   CPP_STAT_INC(StatClockAcquireRelease);
   acquire(c, dst);
   ReleaseStore(c, dst);
 }
 
+void ThreadClock::block_release_sequences(SyncClock *dst) {
+  for (uptr i = 0; i < nclk_; ++i) {
+    if (i != nclk_) {
+      dst->release_sequence_blocked[i] = true;
+    }
+  }
+}
 // Updates only single element related to the current thread in dst->clk_.
 void ThreadClock::UpdateCurrentThread(ClockCache *c, SyncClock *dst) const {
   // Update the threads time, but preserve 'acquired' flag.
@@ -571,6 +643,12 @@ void SyncClock::DebugDump(int(*printf)(const char *s, ...)) {
       release_store_tid_, release_store_reused_,
       dirty_[0].tid, dirty_[0].epoch,
       dirty_[1].tid, dirty_[1].epoch);
+}
+
+void SyncClock::ResizeReleaseSequenceVectors(const unsigned int tid, u16 nclk) {
+  released_threads_clock.Resize(nclk);
+  released_threads_clock[tid].Resize(nclk);
+  release_sequence_blocked.Resize(nclk);
 }
 
 void SyncClock::Iter::Next() {

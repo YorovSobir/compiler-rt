@@ -15,6 +15,7 @@
 
 #include "tsan_defs.h"
 #include "tsan_dense_alloc.h"
+#include "sanitizer_common/sanitizer_vector.h"
 
 namespace __tsan {
 
@@ -34,6 +35,7 @@ class SyncClock {
   u64 get_clean(unsigned tid) const;
 
   void Resize(ClockCache *c, uptr nclk);
+  void ResizeReleaseSequenceVectors(unsigned int tid, u16 nclk);
   void Reset(ClockCache *c);
 
   void DebugDump(int(*printf)(const char *s, ...));
@@ -110,6 +112,11 @@ class SyncClock {
   u16 size_;
   u16 blocks_;  // Number of second level blocks.
 
+  // support several release sequence in one sync variable
+  // see Page 5 in https://www.doc.ic.ac.uk/~afd/homepages/papers/pdfs/2017/POPL.pdf
+  Vector<Vector<u64>> released_threads_clock;
+  Vector<bool> release_sequence_blocked;
+
   void Unshare(ClockCache *c);
   bool IsShared() const;
   bool Cachable() const;
@@ -136,9 +143,13 @@ class ThreadClock {
 
   void acquire(ClockCache *c, SyncClock *src);
   void release(ClockCache *c, SyncClock *dst);
+  void relaxed(ClockCache *c, SyncClock *dst);
   void acq_rel(ClockCache *c, SyncClock *dst);
   void ReleaseStore(ClockCache *c, SyncClock *dst);
+  void RelaxedStore(ClockCache *c, SyncClock *dst);
   void ResetCached(ClockCache *c);
+
+  void block_release_sequences(SyncClock *dst);
 
   void DebugReset();
   void DebugDump(int(*printf)(const char *s, ...));

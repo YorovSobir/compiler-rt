@@ -264,16 +264,17 @@ static void AtomicStore(ThreadState *thr, uptr pc, volatile T *a, T v,
   // Assume the access is atomic.
   // Strictly saying even relaxed store cuts off release sequence,
   // so must reset the clock.
-  if (!IsReleaseOrder(mo)) {
-    NoTsanAtomicStore(a, v, mo);
-    return;
-  }
+
   __sync_synchronize();
   SyncVar *s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, true);
   thr->fast_state.IncrementEpoch();
   // Can't increment epoch w/o writing to the trace as well.
   TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
-  ReleaseStoreImpl(thr, pc, &s->clock);
+  if (!IsReleaseOrder(mo)) {
+    ReleaseStoreImpl(thr, pc, &s->clock);
+  } else {
+    RelaxedStoreImpl(thr, pc, &s->clock);
+  }
   NoTsanAtomicStore(a, v, mo);
   s->mtx.Unlock();
 }
@@ -282,8 +283,8 @@ template<typename T, T (*F)(volatile T *v, T op)>
 static T AtomicRMW(ThreadState *thr, uptr pc, volatile T *a, T v, morder mo) {
   MemoryWriteAtomic(thr, pc, (uptr)a, SizeLog<T>());
   SyncVar *s = 0;
+  s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, true);
   if (mo != mo_relaxed) {
-    s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, true);
     thr->fast_state.IncrementEpoch();
     // Can't increment epoch w/o writing to the trace as well.
     TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
@@ -293,6 +294,8 @@ static T AtomicRMW(ThreadState *thr, uptr pc, volatile T *a, T v, morder mo) {
       ReleaseImpl(thr, pc, &s->clock);
     else if (IsAcquireOrder(mo))
       AcquireImpl(thr, pc, &s->clock);
+  } else {
+    RelaxedImpl(thr, pc, &s->clock);
   }
   v = F(a, v);
   if (s)
@@ -407,8 +410,8 @@ static bool AtomicCAS(ThreadState *thr, uptr pc,
   MemoryWriteAtomic(thr, pc, (uptr)a, SizeLog<T>());
   SyncVar *s = 0;
   bool write_lock = mo != mo_acquire && mo != mo_consume;
+  s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, write_lock);
   if (mo != mo_relaxed) {
-    s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, write_lock);
     thr->fast_state.IncrementEpoch();
     // Can't increment epoch w/o writing to the trace as well.
     TraceAddEvent(thr, thr->fast_state, EventTypeMop, 0);
@@ -418,6 +421,8 @@ static bool AtomicCAS(ThreadState *thr, uptr pc,
       ReleaseImpl(thr, pc, &s->clock);
     else if (IsAcquireOrder(mo))
       AcquireImpl(thr, pc, &s->clock);
+  } else {
+    RelaxedImpl(thr, pc, &s->clock);
   }
   T cc = *c;
   T pr = func_cas(a, cc, v);
