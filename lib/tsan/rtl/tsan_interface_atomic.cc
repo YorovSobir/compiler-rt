@@ -282,8 +282,7 @@ static void AtomicStore(ThreadState *thr, uptr pc, volatile T *a, T v,
 template<typename T, T (*F)(volatile T *v, T op)>
 static T AtomicRMW(ThreadState *thr, uptr pc, volatile T *a, T v, morder mo) {
   MemoryWriteAtomic(thr, pc, (uptr)a, SizeLog<T>());
-  SyncVar *s = 0;
-  s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, true);
+  SyncVar *s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, true);
   if (mo != mo_relaxed) {
     thr->fast_state.IncrementEpoch();
     // Can't increment epoch w/o writing to the trace as well.
@@ -408,9 +407,8 @@ static bool AtomicCAS(ThreadState *thr, uptr pc,
     volatile T *a, T *c, T v, morder mo, morder fmo) {
   (void)fmo;  // Unused because llvm does not pass it yet.
   MemoryWriteAtomic(thr, pc, (uptr)a, SizeLog<T>());
-  SyncVar *s = 0;
   bool write_lock = mo != mo_acquire && mo != mo_consume;
-  s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, write_lock);
+  SyncVar *s = ctx->metamap.GetOrCreateAndLock(thr, pc, (uptr)a, write_lock);
   if (mo != mo_relaxed) {
     thr->fast_state.IncrementEpoch();
     // Can't increment epoch w/o writing to the trace as well.

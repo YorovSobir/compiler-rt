@@ -348,6 +348,10 @@ void ThreadClock::RelaxedStore(ClockCache *c, SyncClock *dst) {
   DCHECK_LE(dst->released_threads_clock.Size(), kMaxTid);
   DCHECK_LE(dst->release_sequence_blocked.Size(), kMaxTid);
   // TODO(yorov.sobir): add stat here
+  if (dst->size_ == 0) {
+    return;
+  }
+
   // Check if we need to resize dst.
   if (dst->size_ < nclk_) {
     dst->Resize(c, nclk_);
@@ -359,6 +363,8 @@ void ThreadClock::RelaxedStore(ClockCache *c, SyncClock *dst) {
   }
   // relaxed store block all release sequences on current atomic
   block_release_sequences(dst);
+  // unshare before changing dst
+  dst->Unshare(c);
   if (!dst->release_sequence_blocked[tid_]) {
     uptr i = 0;
     for (ClockElem &ce : *dst) {
@@ -372,6 +378,7 @@ void ThreadClock::RelaxedStore(ClockCache *c, SyncClock *dst) {
       ce.reused = 0;
     }
   }
+  dst->FlushDirty();
 }
 
 void ThreadClock::acq_rel(ClockCache *c, SyncClock *dst) {
@@ -382,7 +389,7 @@ void ThreadClock::acq_rel(ClockCache *c, SyncClock *dst) {
 
 void ThreadClock::block_release_sequences(SyncClock *dst) {
   for (uptr i = 0; i < nclk_; ++i) {
-    if (i != nclk_) {
+    if (i != tid_) {
       dst->release_sequence_blocked[i] = true;
     }
   }
