@@ -142,11 +142,14 @@ class ThreadClock {
   uptr size() const;
 
   void acquire(ClockCache *c, SyncClock *src);
+  void relaxed_load(ClockCache *c, SyncClock *src);
   void release(ClockCache *c, SyncClock *dst);
-  void relaxed(ClockCache *c, SyncClock *dst);
+  void relaxed_store(ClockCache *c, SyncClock *dst);
   void acq_rel(ClockCache *c, SyncClock *dst);
   void ReleaseStore(ClockCache *c, SyncClock *dst);
   void RelaxedStore(ClockCache *c, SyncClock *dst);
+  void acquire_fence();
+  void release_fence();
   void ResetCached(ClockCache *c);
 
   void block_release_sequences(SyncClock *dst);
@@ -174,6 +177,8 @@ class ThreadClock {
   // Number of active elements in the clk_ table (the rest is zeros).
   uptr nclk_;
   u64 clk_[kMaxTidInClock];  // Fixed size vector clock.
+  u64 fence_release_clock[kMaxTidInClock];
+  u64 fence_acquire_clock[kMaxTidInClock];
 
   bool IsAlreadyAcquired(const SyncClock *src) const;
   void UpdateCurrentThread(ClockCache *c, SyncClock *dst) const;

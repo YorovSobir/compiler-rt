@@ -224,16 +224,20 @@ static T AtomicLoad(ThreadState *thr, uptr pc, const volatile T *a, morder mo) {
   CHECK(IsLoadOrder(mo));
   // This fast-path is critical for performance.
   // Assume the access is atomic.
-  if (!IsAcquireOrder(mo)) {
-    MemoryReadAtomic(thr, pc, (uptr)a, SizeLog<T>());
-    return NoTsanAtomicLoad(a, mo);
-  }
+//  if (!IsAcquireOrder(mo)) {
+//    MemoryReadAtomic(thr, pc, (uptr)a, SizeLog<T>());
+//    return NoTsanAtomicLoad(a, mo);
+//  }
   // Don't create sync object if it does not exist yet. For example, an atomic
   // pointer is initialized to nullptr and then periodically acquire-loaded.
   T v = NoTsanAtomicLoad(a, mo);
   SyncVar *s = ctx->metamap.GetIfExistsAndLock((uptr)a, false);
   if (s) {
-    AcquireImpl(thr, pc, &s->clock);
+    if (IsAcquireOrder(mo)) {
+      AcquireImpl(thr, pc, &s->clock);
+    } else {
+      RelaxedLoadImpl(thr, pc, &s->clock);
+    }
     // Re-read under sync mutex because we need a consistent snapshot
     // of the value and the clock we acquire.
     v = NoTsanAtomicLoad(a, mo);
@@ -449,8 +453,11 @@ static void NoTsanAtomicFence(morder mo) {
 }
 
 static void AtomicFence(ThreadState *thr, uptr pc, morder mo) {
-  // FIXME(dvyukov): not implemented.
-  __sync_synchronize();
+  if (IsAcquireOrder(mo))
+    AcquireFenceImpl(thr, pc);
+  else if (IsReleaseOrder(mo))
+    ReleaseFenceImpl(thr, pc);
+  NoTsanAtomicFence(mo);
 }
 #endif
 

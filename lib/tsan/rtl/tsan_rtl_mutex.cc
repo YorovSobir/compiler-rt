@@ -483,6 +483,14 @@ void AcquireImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   StatInc(thr, StatSyncAcquire);
 }
 
+void RelaxedLoadImpl(ThreadState *thr, uptr pc, SyncClock *c) {
+  if (thr->ignore_sync) {
+    return;
+  }
+  thr->clock.set(thr->fast_state.epoch());
+  thr->clock.relaxed_load(&thr->proc()->clock_cache, c);
+}
+
 void ReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync)
     return;
@@ -496,9 +504,9 @@ void RelaxedImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync) {
     return;
   }
-//  thr->clock.set(thr->fast_state.epoch());
-//  thr->fast_synch_epoch = thr->fast_state.epoch();
-  thr->clock.relaxed(&thr->proc()->clock_cache, c);
+  thr->clock.set(thr->fast_state.epoch());
+  thr->fast_synch_epoch = thr->fast_state.epoch();
+  thr->clock.relaxed_store(&thr->proc()->clock_cache, c);
   // TODO(yorov.sobir): add stat here
 }
 
@@ -515,8 +523,8 @@ void RelaxedStoreImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   if (thr->ignore_sync) {
     return;
   }
-//  thr->clock.set(thr->fast_state.epoch());
-//  thr->fast_synch_epoch = thr->fast_state.epoch();
+  thr->clock.set(thr->fast_state.epoch());
+  thr->fast_synch_epoch = thr->fast_state.epoch();
   thr->clock.RelaxedStore(&thr->proc()->clock_cache, c);
   // TODO(yorov.sobir): add stat here
 }
@@ -529,6 +537,26 @@ void AcquireReleaseImpl(ThreadState *thr, uptr pc, SyncClock *c) {
   thr->clock.acq_rel(&thr->proc()->clock_cache, c);
   StatInc(thr, StatSyncAcquire);
   StatInc(thr, StatSyncRelease);
+}
+
+void AcquireFenceImpl(ThreadState *thr, uptr pc) {
+  if (thr->ignore_sync) {
+    return;
+  }
+  thr->clock.set(thr->fast_state.epoch());
+  thr->fast_synch_epoch = thr->fast_state.epoch();
+  thr->clock.acquire_fence();
+  //TODO(sobir.yorov94@gmail.com): add stat
+}
+
+void ReleaseFenceImpl(ThreadState *thr, uptr pc) {
+  if (thr->ignore_sync) {
+    return;
+  }
+  thr->clock.set(thr->fast_state.epoch());
+  thr->fast_synch_epoch = thr->fast_state.epoch();
+  thr->clock.release_fence();
+  //TODO(sobir.yorov94@gmail.com): add stat
 }
 
 void ReportDeadlock(ThreadState *thr, uptr pc, DDReport *r) {

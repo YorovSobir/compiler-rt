@@ -178,6 +178,22 @@ void ThreadClock::acquire(ClockCache *c, SyncClock *src) {
   }
 }
 
+void ThreadClock::relaxed_load(ClockCache *c, SyncClock *src) {
+  DCHECK_LE(nclk_, kMaxTid);
+  DCHECK_LE(src->size_, kMaxTid);
+
+  // Check if it's empty -> no need to do anything.
+  if (src->size_ == 0) {
+    return;
+  }
+
+  uptr i = 0;
+  for (ClockElem &ce : *src) {
+    fence_acquire_clock[i] = max(fence_acquire_clock[i], ce.epoch);
+    ++i;
+  }
+}
+
 void ThreadClock::release(ClockCache *c, SyncClock *dst) {
   DCHECK_LE(nclk_, kMaxTid);
   DCHECK_LE(dst->size_, kMaxTid);
@@ -185,6 +201,9 @@ void ThreadClock::release(ClockCache *c, SyncClock *dst) {
   if (dst->size_ == 0) {
     // ReleaseStore will correctly set release_store_tid_,
     // which can be important for future operations.
+    // TODO(sobir.yorov94):
+    // maybe failed because RMW doesn't block release sequence,
+    // but in ReleaseStore we are blocked they
     ReleaseStore(c, dst);
     return;
   }
@@ -244,10 +263,24 @@ void ThreadClock::release(ClockCache *c, SyncClock *dst) {
     dst->elem(tid_).reused = reused_;
 }
 
-void ThreadClock::relaxed(ClockCache *c, SyncClock *dst) {
+void ThreadClock::relaxed_store(ClockCache *c, SyncClock *dst) {
   DCHECK_LE(nclk_, kMaxTid);
   DCHECK_LE(dst->size_, kMaxTid);
-  // Since we do RMW with relaxed ordering nothing is changed
+
+  // Check if we need to resize dst.
+  if (dst->size_ < nclk_)
+    dst->Resize(c, nclk_);
+
+  // TODO(sobir.yorov94@gmail.com):
+  // optimize in case when we didn't change fence_release_clock from last time
+  dst->Unshare(c);
+  uptr i = 0;
+  for (ClockElem &ce : *dst) {
+    ce.epoch = max(ce.epoch, fence_release_clock[i]);
+    ce.reused = 0;
+    i++;
+  }
+  dst->FlushDirty();
 }
 
 void ThreadClock::ReleaseStore(ClockCache *c, SyncClock *dst) {
@@ -348,9 +381,6 @@ void ThreadClock::RelaxedStore(ClockCache *c, SyncClock *dst) {
   DCHECK_LE(dst->released_threads_clock.Size(), kMaxTid);
   DCHECK_LE(dst->release_sequence_blocked.Size(), kMaxTid);
   // TODO(yorov.sobir): add stat here
-  if (dst->size_ == 0) {
-    return;
-  }
 
   // Check if we need to resize dst.
   if (dst->size_ < nclk_) {
@@ -368,14 +398,17 @@ void ThreadClock::RelaxedStore(ClockCache *c, SyncClock *dst) {
   if (!dst->release_sequence_blocked[tid_]) {
     uptr i = 0;
     for (ClockElem &ce : *dst) {
-      ce.epoch = dst->released_threads_clock[tid_][i];
+      ce.epoch = max(dst->released_threads_clock[tid_][i],
+                     fence_release_clock[i]);
       ce.reused = 0;
       i++;
     }
   } else {
+    uptr i = 0;
     for (ClockElem &ce : *dst) {
-      ce.epoch = 0;
+      ce.epoch = fence_release_clock[i];
       ce.reused = 0;
+      i++;
     }
   }
   dst->FlushDirty();
@@ -385,6 +418,20 @@ void ThreadClock::acq_rel(ClockCache *c, SyncClock *dst) {
   CPP_STAT_INC(StatClockAcquireRelease);
   acquire(c, dst);
   ReleaseStore(c, dst);
+}
+
+void ThreadClock::acquire_fence() {
+  DCHECK_LE(nclk_, kMaxTid);
+  for (uptr i = 0; i < nclk_; ++i) {
+    clk_[i] = max(clk_[i], fence_acquire_clock[i]);
+  }
+}
+
+void ThreadClock::release_fence() {
+  DCHECK_LE(nclk_, kMaxTid);
+  for (uptr i = 0; i < nclk_; ++i) {
+    fence_release_clock[i] = clk_[i];
+  }
 }
 
 void ThreadClock::block_release_sequences(SyncClock *dst) {
